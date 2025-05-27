@@ -6,8 +6,37 @@ import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import VoiceRecognition from "@/components/VoiceRecognition";
 
-// This would typically come from an API or database
-const workoutCategories = [
+// Interface pour le type Category
+interface Category {
+  id: string;
+  name: string;
+  color: string;
+  icon?: string;
+}
+
+// Interface pour l'exercice
+interface Exercise {
+  name: string;
+  sets: number;
+  reps: number;
+  weight: string;
+  duration: string;
+  distance: string;
+}
+
+// Interface pour l'entraînement
+interface Workout {
+  date: string;
+  categoryId: string;
+  duration: number;
+  intensity: number;
+  notes: string;
+  exercises: Exercise[];
+}
+
+const BASE_API_URL = "http://localhost:1111/api";
+
+const staticWorkoutCategories = [
   { id: "1", name: "Musculation", color: "#4299e1", icon: "💪" },
   { id: "2", name: "Cardio", color: "#48bb78", icon: "🏃" },
   { id: "3", name: "Mobilité", color: "#ed8936", icon: "🧘" },
@@ -19,27 +48,12 @@ const workoutCategories = [
 export default function NewWorkoutPage() {
   const { isAuthenticated, loading: authLoading } = useAuth();
   const router = useRouter();
-  
-  // Define types for workout and exercise
-  type Exercise = {
-    name: string;
-    sets: number;
-    reps: number;
-    weight: string;
-    duration: string;
-    distance: string;
-  };
-
-  type Workout = {
-    date: string;
-    categoryId: string;
-    duration: number;
-    intensity: number;
-    notes: string;
-    exercises: Exercise[];
-  };
-
   const [step, setStep] = useState(1);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  
+  // État pour l'entraînement
   const [workout, setWorkout] = useState<Workout>({
     date: new Date().toISOString().split('T')[0],
     categoryId: "",
@@ -48,6 +62,7 @@ export default function NewWorkoutPage() {
     notes: "",
     exercises: []
   });
+  
   const [currentExercise, setCurrentExercise] = useState<Exercise>({
     name: "",
     sets: 3,
@@ -68,6 +83,45 @@ export default function NewWorkoutPage() {
       router.push('/login');
     }
   }, [isAuthenticated, authLoading, router]);
+
+  // Récupérer les catégories au chargement du composant
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    
+    const fetchCategories = async () => {
+      try {
+        setLoading(true);
+        
+        // Tentative de récupération des catégories depuis l'API
+        try {
+          const response = await fetch(`${BASE_API_URL}/workout-categories`, {
+            credentials: 'include',
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            setCategories(data);
+            return;
+          }
+          
+          // Si l'API échoue, utilisez les données statiques
+          console.warn("Impossible d'accéder à l'API, utilisation de données statiques");
+          setCategories(staticWorkoutCategories);
+        } catch (apiError) {
+          console.error("Erreur API:", apiError);
+          // Utiliser les données statiques en cas d'erreur
+          setCategories(staticWorkoutCategories);
+        }
+      } catch (err) {
+        console.error('Erreur:', err);
+        setError('Impossible de charger les catégories d\'entraînement');
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchCategories();
+  }, [isAuthenticated]);
 
   // Show loading while checking authentication
   if (authLoading) {
@@ -130,14 +184,52 @@ export default function NewWorkoutPage() {
     setIsSubmitting(true);
     
     try {
-      // In a real app, this would send data to an API
-      console.log("Submitting workout:", workout);
+      // 1. Créer l'entraînement sans les exercices
+      const workoutToSubmit = {
+        categoryId: workout.categoryId,
+        date: workout.date,
+        duration: workout.duration,
+        intensity: workout.intensity,
+        notes: workout.notes
+      };
+
+      const workoutResponse = await fetch(`${BASE_API_URL}/workouts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify(workoutToSubmit)
+      });
       
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (!workoutResponse.ok) {
+        throw new Error('Erreur lors de la création de l\'entraînement');
+      }
       
-      // Success - redirect to workouts page
-      router.push("/workouts");
+      const workoutData = await workoutResponse.json();
+      const workoutId = workoutData.workout.id;
+      
+      // 2. Ajouter les exercices
+      for (const exercise of workout.exercises) {
+        const exerciseResponse = await fetch(`${BASE_API_URL}/exercises`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+          body: JSON.stringify({
+            ...exercise,
+            workoutId: workoutId
+          })
+        });
+        
+        if (!exerciseResponse.ok) {
+          throw new Error('Erreur lors de l\'ajout des exercices');
+        }
+      }
+      
+      // 3. Rediriger vers la page de détail de l'entraînement
+      router.push(`/workouts/`);
     } catch (error) {
       console.error("Error submitting workout:", error);
       setIsSubmitting(false);
@@ -218,7 +310,17 @@ export default function NewWorkoutPage() {
     setIsVoiceRecording(true);
   };
 
-  const selectedCategory = workoutCategories.find(c => c.id === workout.categoryId);
+  // Affichage du message de chargement
+  if (loading) {
+    return <div className="flex justify-center items-center p-10">Chargement des catégories...</div>;
+  }
+  
+  // Affichage du message d'erreur
+  if (error) {
+    return <div className="text-red-500 p-4">{error}</div>;
+  }
+
+  const selectedCategory = categories.find(c => c.id === workout.categoryId);
 
   return (
     <div className="space-y-6">
@@ -302,7 +404,7 @@ export default function NewWorkoutPage() {
         <div>
           <h2 className="text-lg font-medium mb-4">Choisissez une catégorie</h2>
           <div className="grid grid-cols-2 gap-3">
-            {workoutCategories.map((category) => (
+            {categories.map((category) => (
               <button
                 key={category.id}
                 onClick={() => handleCategorySelect(category.id)}
